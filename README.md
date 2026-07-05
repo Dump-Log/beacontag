@@ -53,13 +53,12 @@ privileged / `NET_RAW` / `--net=host` flags and runs as an unprivileged user.
 
 ## Usage
 
-The container can only see the directory you mount at `/data`. Create it, drop
-your pcap(s) in, and mount it on every run:
+The container can only see the directory it mounts at `/data`. drop
+your pcap(s) in, and it mounts on every run:
 
-```bash
-mkdir -p data
-cp /path/to/capture.pcap data/
-```
+The test file Traffic-Test.pcap is included in the /data directory, it's a simulated traffic example with 2 seperate beacons, both utilizing jitter, 15% and 30%.
+
+
 
 **Any `--json` / `--annotate` path must be under `/data`, or the output won't
 reach your host.**
