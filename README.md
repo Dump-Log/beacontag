@@ -113,7 +113,7 @@ docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/data:/data" \
 | `--w-timing` / `--w-count` / `--w-size` | `0.65` / `0.20` / `0.15` | Blend weights (auto-normalized). |
 | `--json FILE` | — | Write full JSON report. |
 | `--annotate [FILE]` | `defaults to [input].annotated.pcapng if no filename is provided` | Write annotated pcapng for Wireshark. |
-| `--ports` | — | Specify ports to ignore |
+| `--ports` | — | Specify ports to ignore, comma seperated |
 
 ---
 
