@@ -23,8 +23,9 @@ Requires tshark on PATH (ships with Wireshark) for reading, scapy for writing
 the annotated pcapng, and scipy+numpy for the Lomb-Scargle timing test.
 
 Usage:
-  python3 beacontag.py <capture.pcap> [--annotate out.pcapng]
+  python3 beacontag.py <capture.pcap> [--annotate [out.pcapng]]
                        [--json report.json] [--threshold 0.85] [--min-conns 10]
+                       [--ports 53,123]
 """
 import argparse
 import json
@@ -53,31 +54,48 @@ def require_tool(name):
 # Ingestion (tshark)
 # ---------------------------------------------------------------------------
 
-def ingest(path):
-    """Return [(frame_no, epoch_time, src, dst, dport, size)] via tshark."""
+def ingest(path, ignore_ports=()):
+    """Return [(frame_no, epoch_time, src, dst, dport, size)] via tshark.
+
+    `ignore_ports` is a set of port numbers to drop entirely. Source ports are
+    read alongside destination ports purely so the filter is direction-agnostic:
+    a packet is dropped if EITHER endpoint is an ignored port, so both halves of
+    e.g. a :53 conversation disappear rather than just the client->server half.
+    Dropped packets never reach scoring, so ignored ports are never flagged and
+    never annotated."""
     tshark = require_tool("tshark")
     cmd = [
         tshark, "-r", path, "-T", "fields",
         "-e", "frame.number", "-e", "frame.time_epoch",
         "-e", "ip.src", "-e", "ip.dst",
         "-e", "tcp.dstport", "-e", "udp.dstport",
+        "-e", "tcp.srcport", "-e", "udp.srcport",
         "-e", "frame.len",
         "-E", "separator=,", "-E", "occurrence=f",
     ]
     out = subprocess.check_output(cmd, stderr=subprocess.DEVNULL).decode("utf-8", "replace")
+    ignore_ports = set(ignore_ports)
     rows = []
     for line in out.splitlines():
         parts = line.split(",")
-        if len(parts) < 7:
+        if len(parts) < 9:
             continue
-        fno, tepoch, src, dst, tport, uport, length = parts[:7]
+        fno, tepoch, src, dst, tport, uport, tsport, usport, length = parts[:9]
         if not src or not dst:
             continue
         dport = tport or uport
         if not dport:
             continue
+        sport = tsport or usport
         try:
-            rows.append((int(fno), float(tepoch), src, dst, int(dport), int(length)))
+            dport_i = int(dport)
+            sport_i = int(sport) if sport else None
+        except ValueError:
+            continue
+        if dport_i in ignore_ports or (sport_i is not None and sport_i in ignore_ports):
+            continue
+        try:
+            rows.append((int(fno), float(tepoch), src, dst, dport_i, int(length)))
         except ValueError:
             continue
     return rows
@@ -329,13 +347,50 @@ def annotate(in_pcap, out_pcapng, flagged):
                                capture_comment=summary)
 
 
+def default_annotated_path(pcap):
+    """`--annotate` with no filename: sit the output next to the input as
+    <input>.annotated.pcapng, keeping the original extension in the name so the
+    source capture is obvious (traffic.pcap -> traffic.pcap.annotated.pcapng)."""
+    return pcap + ".annotated.pcapng"
+
+
+def parse_ports(values):
+    """Parse the repeatable `--ports` flag: each value is a comma-separated list
+    of ports (`--ports 53,123 --ports 8080`). Returns a set of ints; bails out on
+    anything that isn't a valid port number. Kept as a single comma-separated
+    value rather than nargs="+" so a trailing port can't swallow the pcap
+    positional (`--ports 53 capture.pcap`)."""
+    ports = set()
+    for chunk in values or []:
+        for item in chunk.replace(";", ",").split(","):
+            item = item.strip()
+            if not item:
+                continue
+            try:
+                port = int(item)
+            except ValueError:
+                print("error: --ports expects port numbers, got %r" % item, file=sys.stderr)
+                sys.exit(2)
+            if not 0 <= port <= 65535:
+                print("error: --ports value out of range: %d" % port, file=sys.stderr)
+                sys.exit(2)
+            ports.add(port)
+    return ports
+
+
 # ---------------------------------------------------------------------------
 
 def main():
     ap = argparse.ArgumentParser(description="Score conversations for C2 beaconing and annotate for Wireshark.")
     ap.add_argument("pcap", help="input capture (.pcap/.pcapng)")
-    ap.add_argument("--annotate", metavar="OUT.pcapng", help="write annotated pcapng for Wireshark")
+    ap.add_argument("--annotate", metavar="OUT.pcapng", nargs="?", const="", default=None,
+                    help="write annotated pcapng for Wireshark; with no filename, "
+                         "defaults to <input>.annotated.pcapng")
     ap.add_argument("--json", metavar="REPORT.json", help="write full JSON report")
+    ap.add_argument("--ports", metavar="PORTS", action="append", default=None,
+                    help="comma-separated ports to ignore; traffic on these ports is "
+                         "neither scored nor annotated (e.g. --ports 53,123). "
+                         "May be repeated.")
     ap.add_argument("--threshold", type=float, default=0.85, help="beacon_score >= this is flagged (default 0.85)")
     ap.add_argument("--min-conns", type=int, default=10, help="min check-ins to score a conversation (default 10)")
     ap.add_argument("--session-gap", type=float, default=2.0,
@@ -355,7 +410,12 @@ def main():
         print("no such file: %s" % args.pcap, file=sys.stderr)
         sys.exit(1)
 
-    rows = ingest(args.pcap)
+    ignore_ports = parse_ports(args.ports)
+    annotate_path = None
+    if args.annotate is not None:
+        annotate_path = args.annotate or default_annotated_path(args.pcap)
+
+    rows = ingest(args.pcap, ignore_ports=ignore_ports)
     results = score_conversations(rows, args.min_conns,
                                   session_gap=args.session_gap,
                                   w_timing=args.w_timing,
@@ -369,6 +429,8 @@ def main():
     print("=" * 84)
     print("Scored %d conversations (>= %d check-ins). Threshold=%.2f"
           % (len(results), args.min_conns, args.threshold))
+    if ignore_ports:
+        print("Ignoring ports: %s" % ", ".join(str(p) for p in sorted(ignore_ports)))
     print("")
     print("%-38s %6s %9s %7s %5s %5s %6s" % ("conversation", "chkins", "interval",
                                              "bytes", "MAD", "LS", "score"))
@@ -387,12 +449,13 @@ def main():
         with open(args.json, "w") as fh:
             json.dump({"pcap": os.path.basename(args.pcap),
                        "threshold": args.threshold,
+                       "ignored_ports": sorted(ignore_ports),
                        "flagged": flagged, "all": results}, fh, indent=2)
         print("JSON report: %s" % args.json)
 
-    if args.annotate:
-        annotate(args.pcap, args.annotate, flagged)
-        print("Annotated capture written: %s" % args.annotate)
+    if annotate_path:
+        annotate(args.pcap, annotate_path, flagged)
+        print("Annotated capture written: %s" % annotate_path)
         print("  Open in Wireshark and filter: frame.comment contains \"BEACON\"")
 
     print("=" * 84)
