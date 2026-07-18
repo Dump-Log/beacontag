@@ -68,13 +68,13 @@ reach your host.**
 Basic scan (console only):
 
 ```bash
-docker run --rm -v "$PWD/data:/data" beacontag /data/capture.pcap
+docker run --rm -v "$PWD/data:/data" beacontag /data/Traffic-Test.pcap
 ```
 
 Full triage run — JSON report + Wireshark annotation:
 
 ```bash
-docker run --rm -v "$PWD/data:/data" beacontag /data/capture.pcap \
+docker run --rm -v "$PWD/data:/data" beacontag /data/Traffic-Test.pcap \
     --json /data/report.json \
     --annotate /data/annotated.pcapng
 ```
@@ -82,13 +82,13 @@ docker run --rm -v "$PWD/data:/data" beacontag /data/capture.pcap \
 Widen the net for weaker / higher-jitter beacons (more benign noise appears):
 
 ```bash
-docker run --rm -v "$PWD/data:/data" beacontag /data/capture.pcap --threshold 0.70
+docker run --rm -v "$PWD/data:/data" beacontag /data/Traffic-Test.pcap --threshold 0.70
 ```
 
 Long-sleep beacons — don't merge slow check-ins, require fewer to score:
 
 ```bash
-docker run --rm -v "$PWD/data:/data" beacontag /data/capture.pcap \
+docker run --rm -v "$PWD/data:/data" beacontag /data/Traffic-Test.pcapp \
     --session-gap 5 --min-conns 6
 ```
 
@@ -97,7 +97,7 @@ If output files come out owned by the wrong user (you can't delete them without
 
 ```bash
 docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/data:/data" \
-    beacontag /data/capture.pcap --json /data/report.json
+    beacontag Traffic-Test.pcap --json /data/report.json
 ```
 
 ---
